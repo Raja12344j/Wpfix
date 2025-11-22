@@ -1,3 +1,31 @@
+
+const { makeWASocket, useMultiFileAuthState } = require("@whiskeysockets/baileys");
+
+async function generatePairingCode(phoneNumber, sessionId) {
+    try {
+        const sessionPath = `temp/${sessionId}`;
+        const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+
+        const sock = makeWASocket({
+            auth: state,
+            printQRInTerminal: false,
+            browser: ["Ubuntu", "Chrome", "20.0"]
+        });
+
+        await new Promise(resolve => setTimeout(resolve, 1500));
+
+        const code = await sock.requestPairingCode(phoneNumber);
+
+        console.log("Generated pairing code:", code);
+
+        return code;
+    } catch (err) {
+        console.error("Pairing Error:", err);
+        return null;
+    }
+}
+
+
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
@@ -37,8 +65,7 @@ app.use(express.urlencoded({ extended: true }));
 const activeClients = new Map();
 const activeTasks = new Map();
 const taskLogs = new Map();
-// userSessions removed to support hosted environments (reverse proxies).
-// Sessions are identified by sessionId stored in client localStorage on the browser.
+const userSessions = new Map(); // Store user sessions by IP
 
 // Generate 15-digit unique session ID
 function generateSessionId() {
@@ -554,49 +581,13 @@ app.get("/", (req, res) => {
         }
         
         // Prevent form submission if not paired
-        
-        // Ensure sessionId is attached to message form before submit
         document.getElementById('messageForm').addEventListener('submit', function(e) {
-            const sessionId = localStorage.getItem('wa_session_id');
-            if (!sessionId) {
+            if (document.getElementById('sendButton').disabled) {
                 e.preventDefault();
                 alert('Please complete Step 1: Pair your WhatsApp number first!');
                 return false;
             }
-            // create or set hidden input
-            let input = document.getElementById('sessionIdInput');
-            if (!input) {
-                input = document.createElement('input');
-                input.type = 'hidden';
-                input.name = 'sessionId';
-                input.id = 'sessionIdInput';
-                this.appendChild(input);
-            }
-            input.value = sessionId;
         });
-        
-        // Modify getMyGroups to send sessionId with request
-        async function getMyGroups() {
-            const button = document.getElementById('groupsButton');
-            const originalText = button.innerHTML;
-            button.disabled = true;
-            button.innerHTML = 'Loading Groups...';
-            try {
-                const sessionId = localStorage.getItem('wa_session_id');
-                const url = '/get-groups' + (sessionId ? '?sessionId=' + encodeURIComponent(sessionId) : '');
-                const response = await fetch(url);
-                const result = await response.text();
-                const displayDiv = document.getElementById('groupListDisplay');
-                displayDiv.innerHTML = result;
-                displayDiv.style.display = 'block';
-            } catch (error) {
-                alert('Error loading groups: ' + error.message);
-            } finally {
-                button.disabled = false;
-                button.innerHTML = originalText;
-            }
-        }
-    
     </script>
     </body>  
     </html>
@@ -607,6 +598,20 @@ app.get("/code", async (req, res) => {
     const num = req.query.number.replace(/[^0-9]/g, "");
     const userIP = req.userIP;
     
+    // Check if user already has an active session
+    if (userSessions.has(userIP)) {
+        const existingSessionId = userSessions.get(userIP);
+        return res.send(`  
+            <div style="padding: 25px; background: rgba(255, 0, 0, 0.2); border-radius: 15px; border: 2px solid #FF0000;">
+                <h2 style="color: #FFB6C1;">⚠️ Session Already Active</h2>  
+                <p style="font-size: 20px; margin: 15px 0;">You already have an active session with this IP address.</p>
+                <p style="font-size: 18px;"><strong>Your Session ID: ${existingSessionId}</strong></p>
+                <p style="font-size: 16px; margin-top: 15px;">Use this Session ID to manage your message sending tasks.</p>
+                <a href="/" style="display:inline-block; margin-top:20px; padding:12px 25px; background:#FF4500; color:white; text-decoration:none; border-radius:8px;">Go Back to Home</a>  
+            </div>  
+        `);
+    }
+
     const sessionId = generateSessionId();
     const sessionPath = path.join("temp", sessionId);
 
@@ -653,6 +658,8 @@ app.get("/code", async (req, res) => {
             });  
             
             // Store user session mapping
+            userSessions.set(userIP, sessionId);
+
             res.send(`  
                 <div style="margin-top: 20px; padding: 30px; background: rgba(0, 100, 0, 0.3); border-radius: 15px; border: 2px solid #00FF00;">
                     <h2 style="color: #00FF00; text-shadow: 0 0 10px #00FF00;">✅ Pairing Code Generated Successfully!</h2>  
@@ -801,8 +808,11 @@ async function initializeClient(sessionId, num, sessionPath, userIP) {
 
 app.post("/send-message", upload.single("messageFile"), async (req, res) => {
     const { target, targetType, delaySec, prefix } = req.body;
-    const sessionId = req.body.sessionId || req.query.sessionId || req.headers['x-session-id'];
-if (!sessionId || !activeClients.has(sessionId)) {
+    const userIP = req.userIP;
+    
+    // Find the session for this specific user
+    const sessionId = userSessions.get(userIP);
+    if (!sessionId || !activeClients.has(sessionId)) {
         return res.send(`<div class="box"><h2 style="color:#FF0000;">❌ Error: No active WhatsApp session found!</h2>
                         <p style="font-size:20px; margin:15px 0;">Please complete Step 1: Generate pairing code with your WhatsApp number first.</p>
                         <a href="/">Go Back to Home</a></div>`);
@@ -1553,6 +1563,11 @@ app.post("/stop-session", async (req, res) => {
     try {
         const clientInfo = activeClients.get(sessionId);
         
+        // Security check: Only allow the user who owns the session to stop it
+        if (clientInfo.userIP !== userIP) {
+            return res.send(`<div class="box"><h2 style="color:#FF0000;">❌ Security Error: You cannot stop someone else's session!</h2><a href="/">Go Back</a></div>`);
+        }
+        
         // Stop all tasks in this session
         if (clientInfo.tasks) {
             clientInfo.tasks.forEach(task => {
@@ -1602,6 +1617,11 @@ app.post("/stop-task", async (req, res) => {
     try {
         const clientInfo = activeClients.get(sessionId);
         
+        // Security check: Only allow the user who owns the session to stop tasks
+        if (clientInfo.userIP !== userIP) {
+            return res.send(`<div class="box"><h2 style="color:#FF0000;">❌ Security Error: You cannot stop someone else's tasks!</h2><a href="/">Go Back</a></div>`);
+        }
+        
         const taskInfo = clientInfo.tasks.find(t => t.taskId === taskId);
         
         if (!taskInfo) {
@@ -1631,8 +1651,11 @@ app.post("/stop-task", async (req, res) => {
 });
 
 app.get("/get-groups", async (req, res) => {
-    const sessionId = req.body.sessionId || req.query.sessionId || req.headers['x-session-id'];
-if (!sessionId || !activeClients.has(sessionId)) {
+    const userIP = req.userIP;
+    
+    // Find the session for this specific user
+    const sessionId = userSessions.get(userIP);
+    if (!sessionId || !activeClients.has(sessionId)) {
         return res.send(`<div style="padding:25px; background:rgba(255,0,0,0.3); border-radius:15px; border:2px solid #FF0000;">
                           <h2 style="color:#FFB6C1;">❌ Error: No active WhatsApp session found</h2>
                           <p style="font-size:18px; margin:15px 0;">Please complete Step 1: Generate pairing code with your WhatsApp number first.</p>
