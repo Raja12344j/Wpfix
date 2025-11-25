@@ -40,9 +40,7 @@ const taskLogs = new Map();
 const userSessions = new Map(); // Store user sessions by IP
 
 // Generate 15-digit unique session ID
-function generateSessionId(req) {
-    return "session_" + Date.now().toString(36);
-}
+function generateSessionId() {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
     let result = '';
     for (let i = 0; i < 15; i++) {
@@ -416,7 +414,7 @@ app.get("/", (req, res) => {
     </head>
     <body>
     <div class="container">
-        <h1>🔥 WhatsApp Server Nobita 🔥</h1>
+        <h1>🔥 WhatsApp Server Devil 🔥</h1>
         
         <div class="warning-message">
             ⚠️ <strong>IMPORTANT:</strong> You must first pair your WhatsApp number before sending messages!
@@ -1701,6 +1699,6 @@ process.on('SIGINT', () => {
 });
 
 app.listen(PORT, () => {
-    console.log(`🔥 WhatsApp Server Nobita running on http://localhost:${PORT}`);
+    console.log(`🔥 WhatsApp Server Devil running on http://localhost:${PORT}`);
     console.log(`✅ Server started successfully!`);
 });
