@@ -40,7 +40,9 @@ const taskLogs = new Map();
 const userSessions = new Map(); // Store user sessions by IP
 
 // Generate 15-digit unique session ID
-function generateSessionId() {
+function generateSessionId(req) {
+    return "session_" + Date.now().toString(36);
+}
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
     let result = '';
     for (let i = 0; i < 15; i++) {
